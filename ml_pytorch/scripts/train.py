@@ -17,6 +17,7 @@ from ml_pytorch.utils.setup_logger import setup_logger
 from ml_pytorch.utils.tools import (
     create_DNN_columns_list,
     eval_model,
+    eval_model_multiclass,
     export_onnx,
     get_model_parameters_number,
     save_pytorch_model,
@@ -66,7 +67,9 @@ def main():
     if cfg.histos:
         from ml_pytorch.scripts.sig_bkg_eval import (
             plot_roc_curve,
+            plot_roc_curve_multiclass,
             plot_sig_bkg_distributions,
+            plot_sig_vs_all_distributions,
         )
     if cfg.history:
         from ml_pytorch.scripts.plot_history import plot_history, plot_lr, read_from_txt
@@ -150,14 +153,17 @@ def main():
     logger.info("=" * 20)
     logger.info("default configs")
     logger.info("cfg:\n - %s", "\n - ".join(str(it) for it in default_cfg.items()))
+    logger.info("\n\n")
 
     logger.info("=" * 20)
     logger.info("args")
     logger.info("args:\n - %s", "\n - ".join(str(it) for it in args.__dict__.items()))
+    logger.info("\n\n")
 
     logger.info("=" * 20)
     logger.info("configs")
     logger.info("cfg:\n - %s", "\n - ".join(str(it) for it in cfg.items()))
+    logger.info("\n\n")
 
     if isinstance(cfg.input_variables, str):
         logger.info("Get Input variables from dnn_inputs")
@@ -169,7 +175,8 @@ def main():
         )
 
     input_variables = cfg.input_variables
-    logger.info(input_variables)
+    logger.debug(input_variables)
+    logger.info("\n\n")
 
     early_stopping = cfg.early_stopping
     patience = cfg.patience
@@ -229,9 +236,16 @@ def main():
     )
 
     # Get model
-    model, loss_fn, optimizer, scheduler = ML_model.get_model(
-        input_size, device, cfg.learning_rate, cfg.learning_rate_schedule, n_epochs
-    )
+    if cfg.multiclass:
+        n_classes = len(torch.unique(X_lbl))
+        logger.info(f"Number of classes: {n_classes}")
+        model, loss_fn, optimizer, scheduler = ML_model.get_model(
+            input_size, n_classes, device, cfg.learning_rate, cfg.learning_rate_schedule, n_epochs
+        )
+    else:
+        model, loss_fn, optimizer, scheduler = ML_model.get_model(
+            input_size, device, cfg.learning_rate, cfg.learning_rate_schedule, n_epochs
+        )
     num_parameters = get_model_parameters_number(model)
 
     logger.info(f"Number of parameters: {num_parameters}")
@@ -440,26 +454,50 @@ def main():
         # torch.cuda.empty_cache()
 
         eval_epoch = loaded_epoch if cfg.eval_model else best_epoch
-        logger.info("Training dataset\n")
-        score_lbl_array_train, loss_eval_train, accuracy_eval_train = eval_model(
-            model,
-            training_loader,
-            loss_fn,
-            "training",
-            device,
-            eval_epoch,
-        )
+        if not cfg.multiclass:
+            logger.info("Binary classification evaluation")
+            logger.info("Training dataset\n")
+            score_lbl_array_train, loss_eval_train, accuracy_eval_train = eval_model(
+                model,
+                training_loader,
+                loss_fn,
+                "training",
+                device,
+                eval_epoch,
+            )
 
-        logger.info("\n")
-        logger.info("Test dataset")
-        score_lbl_array_test, loss_eval_test, accuracy_eval_test = eval_model(
-            model,
-            test_loader,
-            loss_fn,
-            "test",
-            device,
-            eval_epoch,
-        )
+            logger.info("\n")
+            logger.info("Test dataset")
+            score_lbl_array_test, loss_eval_test, accuracy_eval_test = eval_model(
+                model,
+                test_loader,
+                loss_fn,
+                "test",
+                device,
+                eval_epoch,
+            )
+        else:
+            logger.info("Multi classification evaluation")
+            logger.info("Training dataset\n")
+            score_lbl_array_train, loss_eval_train, accuracy_eval_train = eval_model_multiclass(
+                model,
+                training_loader,
+                loss_fn,
+                "training",
+                device,
+                eval_epoch,
+            )
+
+            logger.info("\n")
+            logger.info("Test dataset")
+            score_lbl_array_test, loss_eval_test, accuracy_eval_test = eval_model_multiclass(
+                model,
+                test_loader,
+                loss_fn,
+                "test",
+                device,
+                eval_epoch,
+            )
         logger.info("================================")
         logger.info(
             "Best epoch # %d, loss val: %.4f, accuracy val: %.4f"
@@ -497,11 +535,36 @@ def main():
                 # [0.3363, 0.3937],
                 train_test_fractions[1],
                 comet_logger=comet_logger,
+                multiclass=cfg.multiclass,
+                signal_col=0,
+                background_col=2,
             )
+
+            if cfg.multiclass:
+                # plot for each class vs rest
+                logger.info("\n\n\n")
+                logger.info("Plotting signal vs all distributions")
+                plot_sig_vs_all_distributions(
+                    score_lbl_array_train,
+                    score_lbl_array_test,
+                    main_dir,
+                    False,
+                    [],
+                    train_test_fractions[1],
+                    comet_logger=comet_logger,
+                    multiclass=cfg.multiclass
+                )
+
         if cfg.roc:
             logger.info("\n\n\n")
-            logger.info("Plotting ROC curve")
-            plot_roc_curve(score_lbl_array_test, main_dir, False, comet_logger=comet_logger)
+            if not cfg.multiclass:
+                logger.info("Plotting ROC curve")
+                plot_roc_curve(score_lbl_array_test, main_dir, False, comet_logger=comet_logger)
+            else:
+                logger.info("Plotting multiclass ROC curve")
+                plot_roc_curve_multiclass(
+                    score_lbl_array_test, main_dir, False, num_classes=4, comet_logger=comet_logger, class_names=None
+                )
 
     # remove ML_model_loaded.py
     if cfg.load_model or cfg.eval_model:

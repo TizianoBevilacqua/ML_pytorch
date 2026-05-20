@@ -1,0 +1,37 @@
+input_variables: bkg_morphing_boosted_dnn_input_variables
+
+preprocess_variables_functions:
+  {
+  }
+
+signal_sample: [DATA_JetMET_JMENano_E_boosted_skimmed,DATA_JetMET_JMENano_F_boosted_skimmed,DATA_JetMET_JMENano_G_boosted_skimmed]
+background_sample: [DATA_JetMET_JMENano_E_boosted_skimmed,DATA_JetMET_JMENano_F_boosted_skimmed,DATA_JetMET_JMENano_G_boosted_skimmed]
+
+run2: False
+signal_region: [boosted_qcd_B_region, boosted_signal_region]
+background_region: [boosted_qcd_A_region, boosted_qcd_C_region]
+signal_dataset: [DATA_JetMET_JMENano_E_2022_postEE_EraE,DATA_JetMET_JMENano_F_2022_postEE_EraF,DATA_JetMET_JMENano_G_2022_postEE_EraG]
+background_dataset: [DATA_JetMET_JMENano_E_2022_postEE_EraE,DATA_JetMET_JMENano_F_2022_postEE_EraF,DATA_JetMET_JMENano_G_2022_postEE_EraG]
+oversample_split: False
+
+ML_model: DNN_softmax_reweight_model
+
+data_format: coffea
+
+batch_size: 512
+epochs: 50
+
+learning_rate: 1e-3
+learning_rate_schedule: e20_drop75
+
+early_stopping: True
+patience: 5
+min_delta: 1e-5
+
+eval_param: "acc"
+
+train_fraction: 0.7125
+val_fraction: 0.2375
+test_fraction: 0.05
+
+data_dirs: [/work/bevila_t/PostDoc/HH4b/Output/PocketCoffea/test_fatjets_training_et_ttbar/]

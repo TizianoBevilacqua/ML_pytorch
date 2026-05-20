@@ -37,6 +37,8 @@ test_fraction: 0.25
 
 run2: False
 
+multiclass: False
+
 # class balancing
 oversample_split: False
 split_oversample: False

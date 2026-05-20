@@ -4,6 +4,7 @@ import numpy as np
 import mplhep as hep
 from scipy import stats
 from sklearn.metrics import roc_curve, roc_auc_score, auc
+from sklearn.preprocessing import label_binarize
 
 hep.style.use("CMS")
 hep.cms.label(loc=0)
@@ -15,6 +16,27 @@ def handle_arrays(score_lbl_tensor, column=0):
 
     sig_value = sig[:, column]
     bkg_value = bkg[:, column]
+
+    return sig_value, bkg_value
+
+
+def handle_multiclass_arrays(score_lbl_tensor, sig_l=0, bkg_l=2, label_col=4, sel_col=0, QCD=False):
+    print("Handling multiclass arrays for sig_col =", sig_l, ", bkg_col =", bkg_l, " label_col=", label_col, ", selected_col =", sel_col)
+    print("score_lbl_tensor shape:", score_lbl_tensor.shape)
+    print("example entries:", score_lbl_tensor[:5, :])
+    sig = score_lbl_tensor[score_lbl_tensor[:, label_col] == sig_l]
+    if bkg_l != -1:
+        bkg = score_lbl_tensor[score_lbl_tensor[:, label_col] == bkg_l]
+    else:
+        bkg = score_lbl_tensor[score_lbl_tensor[:, label_col] != sig_l]
+
+    sig_value = sig[:, sel_col]
+    bkg_value = bkg[:, sel_col]
+
+    if QCD:
+        ttbar_col = int(sel_col+1)
+        sig_value = sig[:, sel_col] - sig[:, ttbar_col]
+        bkg_value = bkg[:, sel_col] - bkg[:, ttbar_col]
 
     return sig_value, bkg_value
 
@@ -141,10 +163,20 @@ def plot_sig_bkg_distributions(
     signal_eff=0.2,
     get_max_significance=False,
     comet_logger=None,
+    multiclass=False,
+    signal_col=0,
+    background_col=2,
+    score_col=0,
+    weights_col=5,
 ):
     # plot the signal and background distributions
-    sig_score_train, bkg_score_train = handle_arrays(score_lbl_tensor_train, 0)
-    sig_score_test, bkg_score_test = handle_arrays(score_lbl_tensor_test, 0)
+    if not multiclass:
+        sig_score_train, bkg_score_train = handle_arrays(score_lbl_tensor_train, 0)
+        sig_score_test, bkg_score_test = handle_arrays(score_lbl_tensor_test, 0)
+    else:
+        print("Using multiclass score handling")
+        sig_score_train, bkg_score_train = handle_multiclass_arrays(score_lbl_tensor_train, sig_l=signal_col, bkg_l=background_col, label_col=4, sel_col=score_col, QCD=True)
+        sig_score_test, bkg_score_test = handle_multiclass_arrays(score_lbl_tensor_test, sig_l=signal_col, bkg_l=background_col, label_col=4, sel_col=score_col, QCD=True)
 
     print("sig_score_train",sig_score_train, sig_score_train.shape)
     print("bkg_score_train",bkg_score_train, bkg_score_train.shape)
@@ -153,8 +185,13 @@ def plot_sig_bkg_distributions(
     
     # get weights
     try:
-        sig_weight_train, bkg_weight_train = handle_arrays(score_lbl_tensor_train, 2)
-        sig_weight_test, bkg_weight_test = handle_arrays(score_lbl_tensor_test, 2)
+        if not multiclass:
+            sig_weight_train, bkg_weight_train = handle_arrays(score_lbl_tensor_train, 2)
+            sig_weight_test, bkg_weight_test = handle_arrays(score_lbl_tensor_test, 2)
+        else:
+            print("Using multiclass weights handling")
+            sig_weight_train, bkg_weight_train = handle_multiclass_arrays(score_lbl_tensor_train, sig_l=signal_col, bkg_l=background_col, label_col=weights_col-1, sel_col=weights_col, QCD=False)
+            sig_weight_test, bkg_weight_test = handle_multiclass_arrays(score_lbl_tensor_test, sig_l=signal_col, bkg_l=background_col, label_col=weights_col-1, sel_col=weights_col, QCD=False)
     except IndexError:
         print("WARNING: No weights found in the input file. Using equal weights.")
         sig_weight_train = np.ones_like(sig_score_train)
@@ -179,7 +216,7 @@ def plot_sig_bkg_distributions(
         sig_score_train,
         weights=sig_weight_train,
         bins=30,
-        range=(0, 1),
+        range=(0, 1) if not multiclass else (-1, 1),
         histtype="step",
         label="Signal (training)",
         density=True,
@@ -192,7 +229,7 @@ def plot_sig_bkg_distributions(
         bkg_score_train,
         weights=bkg_weight_train,
         bins=30,
-        range=(0, 1),
+        range=(0, 1) if not multiclass else (-1, 1),
         histtype="step",
         label="Background (training)",
         density=True,
@@ -224,7 +261,7 @@ def plot_sig_bkg_distributions(
         rescale if rescale else [1, 1],
     ):
 
-        bins = np.linspace(0, 1, 31)
+        bins = np.linspace(0, 1, 31) if not multiclass else np.linspace(-1, 1, 31)
         bin_centers = (bins[1:] + bins[:-1]) / 2
         bin_width = bins[1] - bins[0]
         weight_test = weight_test / (np.sum(weight_test) * bin_width)
@@ -497,6 +534,241 @@ def plot_sig_bkg_distributions(
         plt.show()
 
 
+def plot_sig_vs_all_distributions(
+    score_lbl_tensor_train,
+    score_lbl_tensor_test,
+    dir,
+    show,
+    rescale,
+    test_fraction,
+    signal_eff=0.2,
+    get_max_significance=False,
+    comet_logger=None,
+    multiclass=False,
+    signal_col=0,
+    background_col=-1,
+    score_col=-1,
+    label_col=4,
+    weights_col=5,
+):
+    # plot the signal and background distributions
+    if not multiclass:
+        raise NotImplementedError("The non-multiclass score handling is not implemented yet. Please set multiclass=True.")
+    else:
+        for signal in np.unique(score_lbl_tensor_train[:, label_col]):
+            signal = int(signal)
+            print(f"Signal class: {signal}")
+            print("Using multiclass score handling")
+            sig_score_train, bkg_score_train = handle_multiclass_arrays(score_lbl_tensor_train, sig_l=signal_col, bkg_l=background_col, label_col=4, sel_col=signal, QCD=False)
+            sig_score_test, bkg_score_test = handle_multiclass_arrays(score_lbl_tensor_test, sig_l=signal_col, bkg_l=background_col, label_col=4, sel_col=signal, QCD=False)
+
+            print("sig_score_train",sig_score_train, sig_score_train.shape)
+            print("bkg_score_train",bkg_score_train, bkg_score_train.shape)
+            print("sig_score_test",sig_score_test, sig_score_test.shape)
+            print("bkg_score_test",bkg_score_test, bkg_score_test.shape)
+
+            # get weights
+            try:
+                print("Using multiclass weights handling")
+                sig_weight_train, bkg_weight_train = handle_multiclass_arrays(score_lbl_tensor_train, sig_l=signal_col, bkg_l=background_col, label_col=weights_col-1, sel_col=weights_col, QCD=False)
+                sig_weight_test, bkg_weight_test = handle_multiclass_arrays(score_lbl_tensor_test, sig_l=signal_col, bkg_l=background_col, label_col=weights_col-1, sel_col=weights_col, QCD=False)
+            except IndexError:
+                print("WARNING: No weights found in the input file. Using equal weights.")
+                sig_weight_train = np.ones_like(sig_score_train)
+                bkg_weight_train = np.ones_like(bkg_score_train)
+                sig_weight_test = np.ones_like(sig_score_test)
+                bkg_weight_test = np.ones_like(bkg_score_test)
+
+            print("sig_weight_train",sig_weight_train, sig_weight_train.shape)
+            print("bkg_weight_train",bkg_weight_train, bkg_weight_train.shape)
+            print("sig_weight_test",sig_weight_test, sig_weight_test.shape)
+            print("bkg_weight_test",bkg_weight_test, bkg_weight_test.shape)
+
+            # fig, ax = plt.subplots()
+            fig, (ax, ax_ratio) = plt.subplots(
+                2,
+                1,
+                figsize=[13, 13],
+                sharex=True,
+                gridspec_kw={"height_ratios": [2.5, 1]},
+            )
+            sig_train = ax.hist(
+                sig_score_train,
+                weights=sig_weight_train,
+                bins=30,
+                range=(0, 1) if not multiclass else (-1, 1),
+                histtype="step",
+                label="Signal (training)",
+                density=True,
+                edgecolor="blue",
+                facecolor="dodgerblue",
+                fill=True,
+                alpha=0.5,
+            )
+            bkg_train = ax.hist(
+                bkg_score_train,
+                weights=bkg_weight_train,
+                bins=30,
+                range=(0, 1) if not multiclass else (-1, 1),
+                histtype="step",
+                label="Background (training)",
+                density=True,
+                color="r",
+                fill=False,
+                hatch="\\\\",
+            )
+
+            max_bin = max(max(sig_train[0]), max(bkg_train[0]))
+            # set limit on y-axis
+            ax.set_ylim(top=max_bin * 2)
+            i = 0
+            legend_test_list = []
+            for (
+                score_test,
+                weight_test,
+                score_train,
+                weight_train,
+                color,
+                label,
+                rescale_factor,
+            ) in zip(
+                [sig_score_test, bkg_score_test],
+                [sig_weight_test, bkg_weight_test],
+                [sig_score_train, bkg_score_train],
+                [sig_weight_train, bkg_weight_train],
+                ["blue", "r"],
+                ["Signal (test)", "Background (test)"],
+                rescale if rescale else [1, 1],
+            ):
+
+                bins = np.linspace(0, 1, 31) if not multiclass else np.linspace(-1, 1, 31)
+                bin_centers = (bins[1:] + bins[:-1]) / 2
+                bin_width = bins[1] - bins[0]
+                weight_test = weight_test / (np.sum(weight_test) * bin_width)
+                weight_train = weight_train / (np.sum(weight_train) * bin_width)
+
+                idx_train = np.digitize(score_train, bins)
+                idx_test = np.digitize(score_test, bins)
+                h_test = []
+                h_train = []
+                err_test = []
+                err_train = []
+
+                for j in range(1, len(bins)):
+                    h_test.append(np.sum(weight_test[idx_test == j]))
+                    h_train.append(np.sum(weight_train[idx_train == j]))
+                    err_test.append(np.sqrt(np.sum(weight_test[idx_test == j] ** 2)))
+                    err_train.append(np.sqrt(np.sum(weight_train[idx_train == j] ** 2)))
+
+                h_test = np.array(h_test)
+                h_train = np.array(h_train)
+                err_test = np.array(err_test)
+                err_train = np.array(err_train)
+
+                print("h_test",h_test)
+                print("h_train",h_train)
+                print("err_test",err_test)
+                print("err_train",err_train)
+
+
+                ratio = h_test / h_train
+                ratio_err_test = np.sqrt(
+                    (err_test / h_train) ** 2 + (h_test * err_train / h_train**2) ** 2
+                )
+                ratio_band_train = err_train / h_train
+
+                legend_test_list.append(
+                    ax.errorbar(
+                        bin_centers,
+                        h_test,
+                        yerr=err_test,
+                        marker="o",
+                        color=color,
+                        label=label,
+                        linestyle="None",
+                    )
+                )
+
+                # ratio plot
+                ax_ratio.errorbar(
+                    bin_centers,
+                    ratio,
+                    yerr=ratio_err_test,
+                    marker="o",
+                    color=color,
+                    label=label,
+                    linestyle="None",
+                )
+                ax_ratio.fill_between(
+                    bin_centers,
+                    1 - ratio_band_train,
+                    1 + ratio_band_train,
+                    color=color,
+                    alpha=0.2,
+                )
+                ax_ratio.axhline(y=1, color="black", linestyle="--")
+
+                # remove empty bins
+                mask = (h_test != 0 ) & (h_train != 0)
+                h_test_nonzero = h_test[mask]
+                h_train_nonzero = h_train[mask]
+                err_test_nonzero = err_test[mask]
+                err_train_nonzero = err_train[mask]
+
+
+            n_sig = np.sum(sig_weight_test) / test_fraction * (rescale[0] if rescale else 1)
+            n_bkg = np.sum(bkg_weight_test) / test_fraction * (rescale[1] if rescale else 1)
+            significance = n_sig / np.sqrt(n_bkg)
+            print(f"\nNumber of signal events in the test dataset: {n_sig}")
+            print(f"Number of background events in the test dataset: {n_bkg}")
+            print(f"Significance: {significance:.2f}\n")
+
+            handles_legend = [
+                sig_train[2][0],
+                legend_test_list[0],
+                bkg_train[2][0],
+                legend_test_list[1],
+            ]
+
+            ax_ratio.set_xlabel("Output score")
+            ax.set_ylabel("Normalized counts")
+            ax_ratio.set_ylabel("Test/Train")
+            ax_ratio.set_ylim(0.75, 1.25)
+
+            ax.legend(
+                loc="upper left",
+                # loc="center",
+                # bbox_to_anchor=(0.3, 0.9),
+                fontsize=20,
+                handles=handles_legend,
+                frameon=False,
+            )
+            ax.grid()
+            ax_ratio.grid()
+            # plt.plot([0.09, 0.88], [8.35, 8.35], color="lightgray", linestyle="-", transform=plt.gca().transAxes)
+
+            hep.cms.lumitext("2022 (13.6 TeV)", ax=ax)
+            hep.cms.text(
+                text="Preliminary",
+                ax=ax,
+                loc=0,
+            )
+            if comet_logger:
+                comet_logger.log_figure("sig_bkg_distributions", plt)
+            plt.savefig(f"{dir}/sig_{signal}_bkg_distributions.png", bbox_inches="tight", dpi=300)
+            plt.savefig(f"{dir}/sig_{signal}_bkg_distributions.pdf", bbox_inches="tight", dpi=300)
+            plt.savefig(f"{dir}/sig_{signal}_bkg_distributions.svg", bbox_inches="tight", dpi=300)
+            ax.set_ylim(bottom=1e-2, top=max_bin**4)
+            ax.set_yscale("log")
+            if comet_logger:
+                comet_logger.log_figure("sig_bkg_distributions_log", plt)
+            plt.savefig(f"{dir}/sig_bkg_distributions_log.png", bbox_inches="tight", dpi=300)
+            plt.savefig(f"{dir}/sig_bkg_distributions_log.pdf", bbox_inches="tight", dpi=300)
+            plt.savefig(f"{dir}/sig_bkg_distributions_log.svg", bbox_inches="tight", dpi=300)
+            if show:
+                plt.show()
+
+
 def plot_roc_curve(score_lbl_tensor_test, dir, show, comet_logger=None):
     # plot the ROC curve
     fig, ax = plt.subplots()
@@ -554,6 +826,101 @@ def plot_roc_curve(score_lbl_tensor_test, dir, show, comet_logger=None):
     plt.savefig(f"{dir}/roc_curve.svg", bbox_inches="tight", dpi=300)
     if show:
         plt.show()
+
+
+def plot_roc_curve_multiclass(score_lbl_tensor_test, dir, show, num_classes, comet_logger=None, class_names=None):
+    """
+    score_lbl_tensor_test: np.ndarray of shape [N, C+1] or [N, C+2]
+        - [:, :C] are per-class scores (probabilities or logits)
+        - [:, C] is integer label in [0..C-1]
+        - [:, C+1] optional weights
+    """
+    try:
+        scores = score_lbl_tensor_test[:, :num_classes]
+        labels = score_lbl_tensor_test[:, num_classes].astype(int)
+    except IndexError:
+        print("WARNING: Mismatch to the expected structure for multiclass [num_class scores, labels, weights].")
+
+    if score_lbl_tensor_test.shape[1] >= num_classes + 2:
+        sample_weights = score_lbl_tensor_test[:, num_classes + 1]
+    else:
+        print("WARNING: No weights found in the input file. Using equal weights.")
+        sample_weights = np.ones(scores.shape[0], dtype=float)
+
+    # One-vs-rest binarization
+    y_bin = label_binarize(labels, classes=np.arange(num_classes))
+
+    if class_names is None:
+        class_names = [f"class {i}" for i in range(num_classes)]
+
+    fig, ax = plt.subplots()
+
+
+    for k in range(num_classes):
+        # skip if class not present (avoid sklearn errors)
+        if y_bin[:, k].sum() == 0 or y_bin[:, k].sum() == len(y_bin):
+            print(f"WARNING: Skipping class {k} in ROC curve as it is not present in the labels.")
+            continue
+
+        fpr, tpr, _ = roc_curve(
+            y_bin[:, k],
+            scores[:, k],
+            sample_weight=sample_weights,
+        )
+
+        # auc_signed = roc_auc_score(
+        #     y_bin[:, k],
+        #     scores[:, k],
+        #     sample_weight=sample_weights,
+        # )
+        # If signed weights can make fpr non-monotonic, fix it for integration:
+        fpr_fixed = np.maximum.accumulate(fpr)
+        auc_signed = auc(fpr_fixed, tpr)   # manual AUC (not roc_auc_score)
+
+        fpr_abs, tpr_abs, _ = roc_curve(
+            y_bin[:, k],
+            scores[:, k],
+            sample_weight=np.abs(sample_weights),
+        )
+        auc_abs = roc_auc_score(
+            y_bin[:, k],
+            scores[:, k],
+            sample_weight=np.abs(sample_weights),
+        )
+
+        # Standard ROC axes: x=FPR, y=TPR
+        ax.plot(tpr, fpr, lw=2,
+                label=f"{class_names[k]} (pos+neg AUC={auc_signed:.3f})")
+        ax.plot(tpr_abs, fpr_abs, lw=2, ls="--",
+                label=f"{class_names[k]} (abs AUC={auc_abs:.3f})")
+
+    ax.plot([0, 1], [0, 1], color="gray", linestyle="--")
+    ax.set_ylabel("False positive rate")
+    ax.set_xlabel("True positive rate")
+    ax.legend(loc="upper left")
+    ax.grid(True)
+
+    # If you want log-FPR (common): log x-axis
+    ax.set_xscale("log")
+    ax.set_xlim(1e-5, 1.0)
+    ax.set_ylim(0.0, 1.0)
+    
+    hep.cms.lumitext(
+        "2022 (13.6 TeV)",
+    )
+    hep.cms.text(
+        text="Preliminary",
+        loc=0,
+    )
+    if comet_logger:
+        comet_logger.log_figure("roc_curve_multiclass", fig)
+    fig.savefig(f"{dir}/roc_curve_multiclass.png", bbox_inches="tight", dpi=300)
+    fig.savefig(f"{dir}/roc_curve_multiclass.pdf", bbox_inches="tight", dpi=300)
+    fig.savefig(f"{dir}/roc_curve_multiclass.svg", bbox_inches="tight", dpi=300)
+    if show:
+        plt.show()
+
+    plt.close(fig)
 
 
 def main():

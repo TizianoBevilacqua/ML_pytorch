@@ -408,6 +408,85 @@ def eval_model(model, loader, loss_fn, type_eval, device, best_epoch):
     return score_lbl_array, avg_loss, avg_accuracy
 
 
+def eval_model_multiclass(model, loader, loss_fn, type_eval, device, best_epoch):
+    # Test the model by running it on the test set
+    running_loss = 0.0
+    tot_loss = 0.0
+
+    running_correct = 0
+    tot_correct = 0
+
+    running_num = 0
+    tot_num = 0
+
+    num_batches = len(loader)
+    count = 0
+
+    all_scores = None
+    all_labels = None
+    all_weights = None
+
+    for i, data in enumerate(loader):
+        (
+            running_loss,
+            running_correct,
+            running_num,
+            tot_loss,
+            tot_correct,
+            tot_num,
+            count,
+            all_scores,
+            all_labels,
+            all_weights,
+        ) = loop_one_batch(
+            running_loss,
+            tot_loss,
+            running_correct,
+            tot_correct,
+            running_num,
+            tot_num,
+            count,
+            i,
+            data,
+            model,
+            None,
+            loss_fn,
+            device,
+            False,
+            time.time(),
+            num_batches,
+            best_epoch,
+            True,
+            all_scores,
+            all_labels,
+            all_weights,
+            type_eval,
+        )
+
+    avg_loss = tot_loss / len(loader)
+    avg_accuracy = tot_correct / tot_num
+
+    if torch.any(all_scores < 0) or torch.any(all_scores > 1):
+        all_scores = torch.nn.functional.softmax(all_scores, dim=1)
+    elif all_scores.shape[1] <= 2:
+        raise ValueError("The number of output nodes is 1 or 2, you shoul use the binary eval function")
+
+    # multi_scores = [all_scores[:, i].view(-1, 1) for i in range(all_scores.shape[1])]
+    # concatenate all scores and labels
+    # all_scores = all_scores.view(-1, 1) all scores is already in correct shape
+    all_labels = all_labels.view(-1, 1)
+    all_weights = all_weights.view(-1, 1)
+
+    score_lbl_tensor = torch.cat((all_scores, all_labels, all_weights), 1)
+    logger.info(f"score_lbl_tensor shape: {score_lbl_tensor.shape}")
+
+    # detach the tensor from the graph and convert to numpy array
+    score_lbl_array = score_lbl_tensor.numpy()
+    # score_lbl_array = score_lbl_tensor.cpu().detach().numpy()
+
+    return score_lbl_array, avg_loss, avg_accuracy
+
+
 def export_onnx(model, model_name, batch_size, input_size, device, onnx_model_name):
     model_dir = os.path.dirname(model_name)
     

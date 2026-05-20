@@ -181,8 +181,23 @@ def get_ratio_model_tensor_onnx(onnx_model, b):
         )
         r = op.div(r_1, r_0)
         print(f"{r_0.type = !s}, {r_1.type = !s}, {r.type = !s}")
+    elif output_shape == 4:
+        rs = []
+        for i in range(output_shape):
+            rs.append(op.squeeze(
+                    op.slice(
+                        r,
+                        op.constant(value=np.array([0, i])),
+                        op.constant(value=np.array([sys.maxsize, i + 1])),
+                    ),
+                    axes=op.const([-1]),
+                )
+            )
+            print(f"rs {i}: {rs[i].type = !s}")
+        r = op.div(op.sub(rs[0], rs[1]), op.sub(rs[2], rs[3]))
+        print(f"{r.type = !s}")
     else:
-        raise ValueError("The output shape is not 1 or 2")
+        raise ValueError("The output shape is not 1, 2 nor 4.")
 
     return r
 

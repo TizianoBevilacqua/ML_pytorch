@@ -79,6 +79,7 @@ def get_variables(
     sig_bkg,
     data_format,
     preprocess_variables_functions,
+    multiclass=False,
 ):
     tot_lenght = 0
     if data_format == "root":
@@ -171,7 +172,9 @@ def get_variables(
     elif data_format == "coffea":
         vars_array = []
         weights = []
+        label_array = []
         variables_dict = {}
+        sum_genweights = {}
         for i, file_name in enumerate(files):
             logger.info(f"Loading file {file_name}")
             file = load(file_name)
@@ -231,6 +234,29 @@ def get_variables(
                                             else 1
                                         )
                                     )
+                                    if multiclass:
+                                        # here I'm building on top of the structure used to do binary classification
+                                        # signal is region QCD B, bkg QCD A but we have 4 classes in total
+                                        # like this we have 0: DATA QCD B, 1: TT in QCD B, 2: DATA in QCD A, 3: TT in QCD A
+                                        if sig_bkg == "signal":
+                                            if ("DATA" in dataset) or ("GluGlu" in dataset):
+                                                label = 0
+                                            elif "TT" in dataset:
+                                                label = 1
+                                        else:
+                                            if ("DATA" in dataset) or ("GluGlu" in dataset):
+                                                label = 2
+                                            elif "TT" in dataset:
+                                                label = 3
+                                        label_array.append(
+                                            np.ones_like(
+                                                weights[-1]
+                                            )
+                                            * label
+                                        )
+                                        logger.info("\n\n")
+                                        logger.info((f"dataset: {dataset} assigned to label {label} with {len(weights[-1])} entries"))
+                                        logger.info(f"label_array: {label_array}")
                                     if dataset in file["sum_genweights"]:
                                         logger.info(
                                             f"original weight: {file['columns'][sample][dataset][region_file]['weight'].value[0]}"
@@ -238,6 +264,7 @@ def get_variables(
                                         logger.info(
                                             f"sum_genweights: {file['sum_genweights'][dataset]}"
                                         )
+                                        logger.info(f"expected event yield: {weights[-1].sum()}")
                                     logger.info(f"weight: {weights[-1]}")
             
         if len(vars_array) < 1:
@@ -250,7 +277,7 @@ def get_variables(
         try:
             # check that all datasets have been found
             # NOTE: the assert could be set to >= in general
-            assert len(vars_array)==len(dataset_list)
+            assert len(vars_array)>=len(dataset_list)
         except AssertionError:
             logger.error(
                 f"Not all datasets were found in the files {files} with the sample_list {sample_list} and dataset_list {dataset_list} and region {region_list}"
@@ -264,9 +291,46 @@ def get_variables(
         concat = {}
         for key in keys:
             concat[key] = np.concatenate([var[key].value for var in vars_array], axis=0)
+            print(f"key {key} has shape {concat[key].shape}")
+            print(f"first ten values of {key}: {concat[key][:10]}")
         vars_array = concat
         # Concatenate multiple weights
         weights = np.concatenate(weights, axis=0)
+        # Concatenate multiple labels
+        if multiclass:
+            label_array = np.concatenate(label_array, axis=0)
+            logger.info("You're running multiclass classification")
+            logger.info(f"label_array shape: {label_array.shape}")
+#
+        #    if True:
+        #        classes = np.unique(label_array)
+        #        counts = {c: np.sum(label_array == c) for c in classes}
+        #        n_min = min(counts.values())
+        #        cap_data = 1 * n_min
+        #        cap_ttbar = int(1 * n_min)
+#
+#
+        #        rng = np.random.default_rng(12345)  # set seed for reproducibility
+#
+        #        selected_idx = []
+        #        for c in classes:
+        #            if c in [0, 2]:  # data
+        #                cap = cap_data
+        #            else:  # ttbar
+        #                cap = cap_ttbar
+        #            idx_c = np.where(label_array == c)[0]
+        #            if idx_c.size > cap:
+        #                idx_c = rng.choice(idx_c, size=cap, replace=False)
+        #            selected_idx.append(idx_c)
+#
+        #        selected_idx = np.concatenate(selected_idx)
+        #        rng.shuffle(selected_idx)  # mix classes
+#
+        #        logger.info(f"label array shape: {label_array.shape}")
+        #        label_array = label_array[selected_idx]
+        #        logger.info(f"Balanced label_array shape: {label_array.shape}")
+        #        weights = weights[selected_idx]
+
 
         for k in input_variables:
             logger.info(k)
@@ -277,6 +341,12 @@ def get_variables(
                 logger.info(f"vars_array[k] before {vars_array[k]}")
                 vars_array[k] = functions_dict[preprocess_variables_functions[k][0]](vars_array[k], *preprocess_variables_functions[k][1])
                 logger.info(f"vars_array[k] after {vars_array[k]}")
+
+            # if multiclass and True:
+            #     logger.info(f"Selecting only balanced events for variable {k}")
+            #     logger.info(f"variables_dict[k] before shape: {vars_array[k].shape}")
+            #     vars_array[k] = vars_array[k][selected_idx]
+            #     logger.info(f"variables_dict[k] after shape: {vars_array[k].shape}")
 
             # check if collection_N is present to unflatten the variables
             if ":" in k:
@@ -319,18 +389,46 @@ def get_variables(
             else:
                 variables_dict[k] = ak.to_numpy(ak.unflatten(vars_array[k], 1))
 
-        weights = np.expand_dims(weights, axis=0)
-        
-        #normalize the weights to have mean of 1
-        weights = weights / np.mean(weights)
+        if not multiclass:
+            weights = np.expand_dims(weights, axis=0)
+
+            #normalize the weights to have mean of 1
+            weights = weights / np.mean(weights)
+        elif False:
+            # normalize the weights to have sum of 1 per class
+            for class_label in np.unique(label_array):
+                # if class_label in [1]:
+                #     logger.info("Normalizing weights for TT samples to reduce importance")
+                #     factor = 0.1
+                # elif class_label in [3]:
+                #     logger.info("Normalizing weights for TT samples to reduce importance")
+                #     factor = 0.1
+                # else:
+                factor = 1.0
+                class_indices = np.where(label_array == class_label)[0]
+                class_weights = weights[class_indices]
+                sum_class_weight = np.sum(class_weights)
+                weights = ak.where(
+                    label_array == class_label,
+                    weights / sum_class_weight * factor,
+                    weights
+                )
+        else:
+            weights = np.expand_dims(ak.to_numpy(weights), axis=0)
+            torch.tensor(weights, dtype=torch.float32)
+            for class_label in np.unique(label_array):
+                class_indices = np.where(label_array == class_label)[0]
+                class_weights = weights[0][class_indices]
+                logger.info(f"After normalization sum of weights for class {class_label}: {np.sum(class_weights)}")
+                print("\n-----------------------------------------------------\n\n")
 
         variables_array = np.concatenate(
             [variables_dict[input] for input in input_variables], axis=1
         )
         variables_array = np.swapaxes(variables_array, 0, 1)
-
         logger.info(f"variables_array {variables_array.shape}")
         logger.info(f"weights {weights.shape}")
+        logger.info(f"label_array {label_array.shape}" if multiclass else "single class problem")
         variables_array = np.append(variables_array, weights, axis=0)
         logger.info(f"variables_array complete {variables_array.shape}")
 
@@ -354,12 +452,24 @@ def get_variables(
 
     logger.info(f"number of {sig_bkg} events: {variables.shape[1]}")
 
-    flag_tensor = (
-        torch.ones_like(variables[0], dtype=torch.float32).unsqueeze(0)
-        if sig_bkg == "signal"
-        else torch.zeros_like(variables[0], dtype=torch.float32).unsqueeze(0)
-    )
-    
+    # create the flag tensor
+    if multiclass:
+        # label_array: shape [num_samples], values 0..num_classes-1
+        # flag_tensor = torch.as_tensor(label_array, dtype=torch.float32)
+        flag_tensor = (
+            torch.ones_like(variables[0], dtype=torch.float32).unsqueeze(0)
+            * label_array
+        )
+    else:
+        flag_tensor = (
+            torch.ones_like(variables[0], dtype=torch.float32).unsqueeze(0)
+            if sig_bkg == "signal"
+            else torch.zeros_like(variables[0], dtype=torch.float32).unsqueeze(0)
+        )
+
+    logger.info(f"flag_tensor shape: {flag_tensor.shape}")
+    print(f"flag_tensor: {flag_tensor}\n")
+
     #shuffle the variables
     idx = np.random.permutation(tot_lenght)
     variables=variables[:,idx]
@@ -440,67 +550,194 @@ def load_data(cfg, seed):
     logger.info(f"Signal files: {sig_files}")
     logger.info(f"Background files: {bkg_files}")
 
-    X_sig, tot_lenght_sig = get_variables(
-        sig_files,
-        sig_parquet_files,
-        total_fraction_of_events,
-        cfg.input_variables,
-        cfg.signal_sample,
-        cfg.signal_dataset,
-        cfg.signal_region,
-        "signal",
-        cfg.data_format,
-        cfg.preprocess_variables_functions,
-    )
-    X_bkg, tot_lenght_bkg = get_variables(
-        bkg_files,
-        bkg_parquet_files,
-        total_fraction_of_events,
-        cfg.input_variables,
-        cfg.background_sample,
-        cfg.background_dataset,
-        cfg.background_region,
-        "background",
-        cfg.data_format,
-        cfg.preprocess_variables_functions,
-    )
-        
+    if not cfg.multiclass:
+        X_sig, tot_lenght_sig = get_variables(
+            sig_files,
+            sig_parquet_files,
+            total_fraction_of_events,
+            cfg.input_variables,
+            cfg.signal_sample,
+            cfg.signal_dataset,
+            cfg.signal_region,
+            "signal",
+            cfg.data_format,
+            cfg.preprocess_variables_functions,
+            multiclass=cfg.multiclass
+        )
+        X_bkg, tot_lenght_bkg = get_variables(
+            bkg_files,
+            bkg_parquet_files,
+            total_fraction_of_events,
+            cfg.input_variables,
+            cfg.background_sample,
+            cfg.background_dataset,
+            cfg.background_region,
+            "background",
+            cfg.data_format,
+            cfg.preprocess_variables_functions,
+            multiclass=cfg.multiclass
+        )
+    else:
+        ttb_B_files = [f for f in sig_files if "TT" in f]
+        ttb_A_files = [f for f in bkg_files if "TT" in f]
+        ttb_B_parquet_files = [f for f in sig_parquet_files if "TT" in f]
+        ttb_A_parquet_files = [f for f in bkg_parquet_files if "TT" in f]
+
+        data_B_files = [f for f in sig_files if "DATA" in f]
+        data_A_files = [f for f in bkg_files if "DATA" in f]
+        data_B_parquet_files = [f for f in sig_parquet_files if "DATA" in f]
+        data_A_parquet_files = [f for f in bkg_parquet_files if "DATA" in f]
+
+        # data_B_files = [f for f in sig_files if "GluGlu" in f]
+        # data_A_files = [f for f in bkg_files if "GluGlu" in f]
+        # data_B_parquet_files = [f for f in sig_parquet_files if "GluGlu" in f]
+        # data_A_parquet_files = [f for f in bkg_parquet_files if "GluGlu" in f]
+
+        X_sig, tot_lenght_sig = get_variables(
+            data_B_files,
+            data_B_parquet_files,
+            total_fraction_of_events,
+            cfg.input_variables,
+            [s for s in cfg.signal_sample if ("DATA" in s) or ("GluGlu" in s)],
+            [s for s in cfg.signal_dataset if ("DATA" in s) or ("GluGlu" in s)],
+            cfg.signal_region,
+            "signal",
+            cfg.data_format,
+            cfg.preprocess_variables_functions,
+            multiclass=cfg.multiclass
+        )
+        X_bkg, tot_lenght_bkg = get_variables(
+            data_A_files,
+            data_A_parquet_files,
+            total_fraction_of_events,
+            cfg.input_variables,
+            [s for s in cfg.background_sample if ("DATA" in s) or ("GluGlu" in s)],
+            [s for s in cfg.background_dataset if ("DATA" in s) or ("GluGlu" in s)],
+            cfg.background_region,
+            "background",
+            cfg.data_format,
+            cfg.preprocess_variables_functions,
+            multiclass=cfg.multiclass
+        )
+        X_ttbar_B, tot_lenght_ttbar_B = get_variables(
+            ttb_B_files,
+            ttb_B_parquet_files,
+            total_fraction_of_events,
+            cfg.input_variables,
+            [s for s in cfg.signal_sample if "TT" in s],
+            [s for s in cfg.signal_dataset if "TT" in s],
+            cfg.signal_region,
+            "signal",
+            cfg.data_format,
+            cfg.preprocess_variables_functions,
+            multiclass=cfg.multiclass
+        )
+        X_ttbar_A, tot_lenght_ttbar_A = get_variables(
+            ttb_A_files,
+            ttb_A_parquet_files,
+            total_fraction_of_events,
+            cfg.input_variables,
+            [s for s in cfg.background_sample if "TT" in s],
+            [s for s in cfg.background_dataset if "TT" in s],
+            cfg.background_region,
+            "background",
+            cfg.data_format,
+            cfg.preprocess_variables_functions,
+            multiclass=cfg.multiclass
+        )
 
     # compute class weights such that sumw is the same for signal and background and each weight is order of 1
+    if cfg.multiclass:
+        print("\n-----------------------------------------------------\n\n")
+        print("X_bkg", X_bkg[0])
+        print("X_ttbar_A", X_ttbar_A[0])
+        print(X_bkg[0].shape[1])
+        print(X_ttbar_A[0].shape[1])
+        print("X_sig", X_sig[0])
+        print("X_ttbar_B", X_ttbar_B[0])
+        print(X_sig[0].shape[1])
+        print(X_ttbar_B[0].shape[1])
+        logger.info(f"Number of events in region A {X_bkg[0].shape[1]+X_ttbar_A[0].shape[1]}")
+        logger.info(f" - Number of data events {X_bkg[1][X_bkg[1] == 2].shape}")
+        logger.info(f" - Number of ttbar events {X_ttbar_A[1][X_ttbar_A[1] == 3].shape}")
+        logger.info(f"Number of signal events {X_sig[0].shape[1]+X_ttbar_B[0].shape[1]}")
+        logger.info(f" - Number of data events {X_sig[1][X_sig[1] == 0].shape}")
+        logger.info(f" - Number of ttbar events {X_ttbar_B[1][X_ttbar_B[1] == 1].shape}")
 
-    logger.info(f"Number of background events  {X_bkg[0].shape[1]}")
-    logger.info(f"Number of signal events {X_sig[0].shape[1]}")
+        logger.info(f"weight in data not equal to one {X_bkg[0][-1][X_bkg[0][-1] != 1]}")
+        logger.info(f"labels of these events {X_bkg[1][(X_bkg[1] != 2)]}")
+        logger.info(f"weight in ttbar equal to one {X_ttbar_A[0][-1][X_ttbar_A[0][-1] == 1]}")
+    else:
+        print("\n-----------------------------------------------------\n\n")
+        logger.info(f"Number of background events {X_bkg[0].shape[1]}")
+        logger.info(f"Number of signal events {X_sig[0].shape[1]}")
     
-    if cfg.oversample_split + cfg.split_oversample+ cfg.undersample >1: 
+    if (cfg.oversample_split + cfg.split_oversample+ cfg.undersample >1) and not cfg.multiclass: 
         raise ValueError("Select only oversample or undersample")
-    
+
     if cfg.undersample:
-        logger.info("Performing undersampling of background")
-        logger.info(f"Number of background events before undersampling {X_bkg[0].shape[1]}")
-        num_events_sig = X_sig[0].shape[1]
-        X_bkg_f = X_bkg[0][
-            :, :num_events_sig
-        ]
-        X_bkg_l = X_bkg[1][
-            :, :num_events_sig
-        ]
-        X_bkg = (X_bkg_f, X_bkg_l)
-        logger.info(f"Number of background events after undersampling {X_bkg[0].shape[1]}")
-        
-    
+        if cfg.multiclass:
+            ttbar_samples = [X_ttbar_B, X_ttbar_A]
+            undersample_normalization_factor = []
+            num_events_sig = X_sig[0].shape[1]
+            num_events_bkg = X_bkg[0].shape[1]
+            logger.info("Performing undersampling of ttbar")
+            logger.info(f"Number of background events before undersampling {X_bkg[0].shape[1]}")
+            for i, x in enumerate(ttbar_samples):
+                if x[0].shape[1] > num_events_bkg:
+                    logger.info(f"Number of ttbar events before undersampling {x[0].shape[1]}")
+                X_f = x[0][
+                    :, :num_events_bkg
+                ]
+                X_l = x[1][
+                    :, :num_events_bkg
+                ]
+                ttbar_samples[i] = (X_f, X_l)
+                logger.info(f"Number of ttbar events after undersampling {x[0].shape[1]}")
+                undersample_normalization_factor.append(x[0][-1].sum() / X_f[-1].sum())
+                X_ttbar_B, X_ttbar_A = ttbar_samples
+            # keep the same sum of weights before and after undersampling to not change the importance of the ttbar samples with respect to the data samples
+            X_ttbar_B[0][-1] = X_ttbar_B[0][-1] * undersample_normalization_factor[0]
+            X_ttbar_A[0][-1] = X_ttbar_A[0][-1] * undersample_normalization_factor[1]
+        else:
+            logger.info("Performing undersampling of background")
+            logger.info(f"Number of background events before undersampling {X_bkg[0].shape[1]}")
+            num_events_sig = X_sig[0].shape[1]
+            X_bkg_f = X_bkg[0][
+                :, :num_events_sig
+            ]
+            X_bkg_l = X_bkg[1][
+                :, :num_events_sig
+            ]
+            X_bkg = (X_bkg_f, X_bkg_l)
+            logger.info(f"Number of background events after undersampling {X_bkg[0].shape[1]}")
 
     if cfg.oversample_split:
-        logger.info("Performing oversampling of signal before splitting")
-        num_events_sig = X_sig[0].shape[1]
-        num_events_bkg = X_bkg[0].shape[1]
-        X_sig_f = X_sig[0].repeat((1, num_events_bkg // num_events_sig + 1))[
-            :, :num_events_bkg
-        ]
-        X_sig_l = X_sig[1].repeat((1, num_events_bkg // num_events_sig + 1))[
-            :, :num_events_bkg
-        ]
-        X_sig = (X_sig_f, X_sig_l)
-        logger.info(f"Number of signal events after oversampling {X_sig[0].shape[1]}")
+        if cfg.multiclass:
+        #     raise NotImplementedError("Oversampling not implemented for multiclass yet")
+            logger.info("Performing oversampling of classes before splitting")
+            num_events_sig = X_sig[0].shape[1]
+            num_events_bkg = X_bkg[0].shape[1]
+            X_sig_f = X_sig[0].repeat((1, num_events_bkg // num_events_sig + 1))[
+                :, :num_events_bkg
+            ]
+            X_sig_l = X_sig[1].repeat((1, num_events_bkg // num_events_sig + 1))[
+                :, :num_events_bkg
+            ]
+            X_sig = (X_sig_f, X_sig_l)
+            logger.info(f"Number of signal events after oversampling {X_sig[0].shape[1]}")
+        else:
+            logger.info("Performing oversampling of signal before splitting")
+            num_events_sig = X_sig[0].shape[1]
+            num_events_bkg = X_bkg[0].shape[1]
+            X_sig_f = X_sig[0].repeat((1, num_events_bkg // num_events_sig + 1))[
+                :, :num_events_bkg
+            ]
+            X_sig_l = X_sig[1].repeat((1, num_events_bkg // num_events_sig + 1))[
+                :, :num_events_bkg
+            ]
+            X_sig = (X_sig_f, X_sig_l)
+            logger.info(f"Number of signal events after oversampling {X_sig[0].shape[1]}")
 
     num_events_bkg = X_bkg[0].shape[1]
     num_events_sig = X_sig[0].shape[1]
@@ -510,6 +747,12 @@ def load_data(cfg, seed):
     sumw_bkg = X_bkg[0][-1].sum()
     logger.info(f"sum of weights before rescaling signal: {sumw_sig}")
     logger.info(f"sum of weights before rescaling backgound: {sumw_bkg}")
+
+    if cfg.multiclass:
+        sumw_ttbar_B = X_ttbar_B[0][-1].sum()
+        sumw_ttbar_A = X_ttbar_A[0][-1].sum()
+        logger.info(f"sum of weights before rescaling signal: {sumw_sig} (DATA in B), {sumw_ttbar_B} (TT in B)")
+        logger.info(f"sum of weights before rescaling backgound: {sumw_bkg} (DATA in A), {sumw_ttbar_A} (TT in A)")
 
     if not cfg.oversample_split and not cfg.split_oversample and not cfg.undersample:
         if True:
@@ -538,42 +781,141 @@ def load_data(cfg, seed):
         sig_class_weights = 1.0
         bkg_class_weights = 1.0
 
-    rescaled_sig_weights = X_sig[0][-1] * sig_class_weights
-    rescaled_bkg_weights = X_bkg[0][-1] * bkg_class_weights
+    if not cfg.multiclass:
+        rescaled_sig_weights = X_sig[0][-1] * sig_class_weights
+        rescaled_bkg_weights = X_bkg[0][-1] * bkg_class_weights
 
-    logger.info(f"sig_class_weights: {sig_class_weights}")
-    logger.info(f"bkg_class_weights: {bkg_class_weights}")
+        logger.info(f"sig_class_weights: {sig_class_weights}")
+        logger.info(f"bkg_class_weights: {bkg_class_weights}")
 
-    # sum of weights
-    sumw_sig = rescaled_sig_weights.sum()
-    sumw_bkg = rescaled_bkg_weights.sum()
-    logger.info(f"sum of weights after rescaling signal: {sumw_sig}")
-    logger.info(f"sum of weights after rescaling backgound: {sumw_bkg}")
+        # sum of weights
+        sumw_sig = rescaled_sig_weights.sum()
+        sumw_bkg = rescaled_bkg_weights.sum()
+        logger.info(f"sum of weights after rescaling signal: {sumw_sig}")
+        logger.info(f"sum of weights after rescaling backgound: {sumw_bkg}")
 
-    sig_class_weights_tensor = (
-        torch.ones_like(X_sig[0][-1], dtype=torch.float32) * sig_class_weights
-    ).unsqueeze(0)
-    bkg_class_weights_tensor = (
-        torch.ones_like(X_bkg[0][-1], dtype=torch.float32) * bkg_class_weights
-    ).unsqueeze(0)
+        sig_class_weights_tensor = (
+            torch.ones_like(X_sig[0][-1], dtype=torch.float32) * sig_class_weights
+        ).unsqueeze(0)
+        bkg_class_weights_tensor = (
+            torch.ones_like(X_bkg[0][-1], dtype=torch.float32) * bkg_class_weights
+        ).unsqueeze(0)
 
-    X_fts = torch.cat((X_sig[0], X_bkg[0]), dim=1).transpose(1, 0)
-    X_lbl = torch.cat((X_sig[1], X_bkg[1]), dim=1).transpose(1, 0).flatten()
-    X_clsw = torch.cat(
-        (sig_class_weights_tensor, bkg_class_weights_tensor), dim=1
-    ).transpose(1, 0)
+        X_fts = torch.cat((X_sig[0], X_bkg[0]), dim=1).transpose(1, 0)
+        logger.info(f"X_fts pre flatten shape: {X_fts.shape}")  
+        logger.info(f"X_sig[1] shape: {X_sig[1].shape}")
+        logger.info(f"X_bkg[1] shape: {X_bkg[1].shape}") 
+        X_lbl = torch.cat((X_sig[1], X_bkg[1]), dim=1).transpose(1, 0).flatten()
 
-    logger.info(f"X_fts shape: {X_fts.shape}")
-    logger.info(f"X_lbl shape: {X_lbl.shape}")
-    logger.info(f"X_clsw shape: {X_clsw.shape}")
+        X_clsw = torch.cat(
+            (sig_class_weights_tensor, bkg_class_weights_tensor), dim=1
+        ).transpose(1, 0)
+    
+        logger.info(f"X_fts shape: {X_fts.shape}")
+        logger.info(f"X_lbl shape: {X_lbl.shape}")
+        logger.info(f"X_clsw shape: {X_clsw.shape}")
 
-    tot_num_events = num_events_sig + num_events_bkg
+        tot_num_events = num_events_sig + num_events_bkg
+
+    else:
+        print("PORCO DIO")
+        print("rescaling factors")
+        print(f"signal {sumw_sig / X_sig[0][-1].sum()}")
+        print(f"background {sumw_bkg / X_bkg[0][-1].sum()}")
+        print(f"ttbar B {sumw_ttbar_B / X_ttbar_B[0][-1].sum()}")
+        print(f"ttbar A {sumw_ttbar_A / X_ttbar_A[0][-1].sum()}")
+        rescaled_sig_weights = X_sig[0][-1] / X_sig[0][-1].sum() * 1000# sumw_sig / X_sig[0][-1].sum() 
+        rescaled_bkg_weights = X_bkg[0][-1] / X_bkg[0][-1].sum() * 1000 # sumw_bkg / X_bkg[0][-1].sum()
+        rescaled_bkg_weights_ttbar_A = X_ttbar_A[0][-1] / X_ttbar_A[0][-1].sum() * 1000# sumw_ttbar_A / X_ttbar_A[0][-1].sum() 
+        rescaled_bkg_weights_ttbar_B = X_ttbar_B[0][-1] / X_ttbar_B[0][-1].sum() * 1000# sumw_ttbar_B / X_ttbar_B[0][-1].sum()
+
+        logger.info(f"sig_class_weights: {sig_class_weights}")
+        logger.info(f"bkg_class_weights: {bkg_class_weights}")
+
+        # sum of weights
+        sumw_sig = rescaled_sig_weights.sum()
+        sumw_bkg = rescaled_bkg_weights.sum()
+        sumw_ttbar_A = rescaled_bkg_weights_ttbar_A.sum()
+        sumw_ttbar_B = rescaled_bkg_weights_ttbar_B.sum()
+
+        logger.info(f"sum of weights after rescaling signal: {sumw_sig}")
+        logger.info(f"sum of weights after rescaling backgound: {sumw_bkg}")
+        logger.info(f"sum of weights after rescaling ttbar A: {sumw_ttbar_A}")
+        logger.info(f"sum of weights after rescaling ttbar B: {sumw_ttbar_B}")
+
+        sig_class_weights_tensor = (
+            rescaled_sig_weights
+        ).unsqueeze(0)
+        bkg_class_weights_tensor = (
+            rescaled_bkg_weights
+        ).unsqueeze(0)
+        ttbar_A_class_weights_tensor = (
+            rescaled_bkg_weights_ttbar_A
+        ).unsqueeze(0)
+        ttbar_B_class_weights_tensor = (
+            rescaled_bkg_weights_ttbar_B
+        ).unsqueeze(0)
+
+        X_fts = torch.cat((X_sig[0], X_ttbar_B[0], X_bkg[0], X_ttbar_A[0]), dim=1).transpose(1, 0)
+        logger.info(f"X_fts pre flatten shape: {X_fts.shape}")  
+        logger.info(f"X_sig[1] shape: {X_sig[1].shape}")
+        logger.info(f"X_ttbar_B[1] shape: {X_ttbar_B[1].shape}")
+        logger.info(f"X_bkg[1] shape: {X_bkg[1].shape}") 
+        logger.info(f"X_ttbar_A[1] shape: {X_ttbar_A[1].shape}") 
+        X_lbl = torch.cat((X_sig[1], X_ttbar_B[1], X_bkg[1], X_ttbar_A[1]), dim=1).transpose(1, 0).flatten()
+
+        X_clsw = torch.ones_like(X_lbl, dtype=torch.float32).unsqueeze(1)
+
+
+        # after you build X_fts and X_lbl exactly as you already do
+        X_lbl = X_lbl.to(torch.long)
+
+        # per-event weight is the last feature column after transpose
+        event_w = X_fts[:, -1].to(torch.float32)   # shape [N]
+        # sum of weights
+        sumw = [X_sig[0][-1].sum(), X_ttbar_B[0][-1].sum(), X_bkg[0][-1].sum(), X_ttbar_A[0][-1].sum()]
+        target_class_weights = cfg.class_weights  # list of 4 elements
+
+
+        print("\n-----------------------------------------------------\n\n")
+        logger.info(f"target_class_weights: {target_class_weights}")
+
+        class_weights = torch.tensor([target_class_weights[i]/sumw[i]for i in range(4)],
+                                    dtype=torch.float32,
+                                    device=X_fts.device)   # shape [4]
+
+        X_clsw = torch.cat(
+            (sig_class_weights_tensor, ttbar_B_class_weights_tensor, bkg_class_weights_tensor, ttbar_A_class_weights_tensor), dim=1
+        ).transpose(1, 0)   # shape [4]
+
+        # per-sample weight = event_w * class_weight[label]
+        logger.info(f"event_w shape: {event_w.shape}")
+        logger.info(f"class_weights shape: {class_weights.shape}")
+        # X_clsw = event_w * class_weights.gather(0, X_lbl)    # shape [N]
+        # X_clsw = X_clsw.unsqueeze(1)                         # shape [N, 1]
+
+
+        logger.info(f"X_fts shape: {X_fts.shape}")
+        logger.info(f"X_lbl shape: {X_lbl.shape}")
+        logger.info(f"X_clsw shape: {X_clsw.shape}")
+        tot_num_events = num_events_sig + num_events_bkg + X_ttbar_B[0].shape[1] + X_ttbar_A[0].shape[1]
+
     if True:
         # shuffle the tensor with numpy random
         idx = np.random.permutation(tot_num_events)
         X_fts = X_fts[idx]
         X_lbl = X_lbl[idx]
         X_clsw = X_clsw[idx]
+
+        if cfg.multiclass:
+            logger.info(f"Unique labels after shuffling: {torch.unique(X_lbl, return_counts=True)}")
+            for class_label in torch.unique(X_lbl):
+                class_indices = torch.where(X_lbl == class_label)[0]
+                class_weights = X_clsw[class_indices]
+                logger.info(f"After shuffling sum of weights for class {class_label.item()}: {torch.sum(class_weights)}")
+                logger.info(f"mean weight for class {class_label.item()}: {torch.mean(class_weights)}")
+                logger.info(f"median weight for class {class_label.item()}: {torch.median(class_weights)}")
+                logger.info(f"min and max weight for class {class_label.item()}: {torch.min(class_weights)}, {torch.max(class_weights)}")
 
     train_size = math.floor(tot_num_events * cfg.train_fraction)
     val_size = math.floor(tot_num_events * cfg.val_fraction)
@@ -584,7 +926,7 @@ def load_data(cfg, seed):
     # keep only total_fraction_of_events
     X_fts = X_fts[:tot_events]
     X_lbl = X_lbl[:tot_events]
-    X_clsw = X_clsw[:tot_events]
+    X_clsw = X_clsw[:tot_events] * 10
 
     X = torch.utils.data.TensorDataset(X_fts, X_lbl, X_clsw)
 
@@ -599,6 +941,8 @@ def load_data(cfg, seed):
     train_dataset, val_dataset, test_dataset = torch.utils.data.random_split(
         X, [train_size, val_size, test_size], generator=gen
     )
+
+    # logger.info(f"Train dataset bincount {torch.bincount(X_lbl)}")
 
     if cfg.split_oversample:
         #perform the oversampling of the signal separately for training, validation and testing datasets
