@@ -222,10 +222,10 @@ def get_variables(
                                     logger.info(f"FOUND DATA : {file_name} {sample} {dataset} {region_file}")
                                     
                                     vars_array.append(
-                                        file["columns"][sample][dataset][region_file]
+                                        file["columns"][sample][dataset][region_file]['nominal']
                                     )
                                     weights.append(
-                                        file["columns"][sample][dataset][region_file][
+                                        file["columns"][sample][dataset][region_file]['nominal'][
                                             "weight"
                                         ].value
                                         / (
@@ -259,7 +259,7 @@ def get_variables(
                                         logger.info(f"label_array: {label_array}")
                                     if dataset in file["sum_genweights"]:
                                         logger.info(
-                                            f"original weight: {file['columns'][sample][dataset][region_file]['weight'].value[0]}"
+                                            f"original weight: {file['columns'][sample][dataset][region_file]['nominal']['weight'].value[0]}"
                                         )
                                         logger.info(
                                             f"sum_genweights: {file['sum_genweights'][dataset]}"
@@ -818,7 +818,6 @@ def load_data(cfg, seed):
         tot_num_events = num_events_sig + num_events_bkg
 
     else:
-        print("PORCO DIO")
         print("rescaling factors")
         print(f"signal {sumw_sig / X_sig[0][-1].sum()}")
         print(f"background {sumw_bkg / X_bkg[0][-1].sum()}")
